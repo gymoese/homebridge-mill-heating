@@ -149,13 +149,13 @@ sudo tail -n 120 /var/lib/homebridge/homebridge.log | grep -i mill
 
 Expected output:
 ```
-Loaded plugin: homebridge-mill-heating@0.2.1
-Registering platform 'homebridge-mill-heating.MillHeatingPlatform'
+Loaded plugin: homebridge-mill-heating@0.2.3
+Registering platform 'homebridge-mill-heating.MillHeating'
 ```
 
 If you see:
 ```
-No plugin was found for the platform "MillHeatingPlatform"
+No plugin was found for the platform "MillHeating"
 ```
 → the plugin is **not installed in `/var/lib/homebridge/node_modules`**.
 

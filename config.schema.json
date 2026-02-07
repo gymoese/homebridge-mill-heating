@@ -1,7 +1,7 @@
 {
   "pluginAlias": "MillHeating",
   "pluginType": "platform",
-  "platform": "MillHeatingPlatform",
+  "platform": "MillHeating",
   "name": "Mill Heating",  
   "singular": true,
   "schema": {
