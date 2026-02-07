@@ -1,0 +1,65 @@
+{
+  "pluginAlias": "MillHeatingPlatform",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "default": "Mill Heating" },
+
+      "pollSeconds": { "type": "number", "default": 10, "minimum": 2, "maximum": 300 },
+      "cacheTtlMs": { "type": "number", "default": 2000, "minimum": 0, "maximum": 10000 },
+
+      "temperatureUnit": {
+        "type": "string",
+        "default": "celsius",
+        "oneOf": [
+          { "title": "Celsius", "enum": ["celsius"] },
+          { "title": "Fahrenheit", "enum": ["fahrenheit"] }
+        ]
+      },
+      "temperatureMin": { "type": "number", "default": 5 },
+      "temperatureMax": { "type": "number", "default": 35 },
+      "temperatureStep": { "type": "number", "default": 0.5 },
+
+      "apiKey": { "type": "string", "default": "" },
+      "allowInsecureHttps": { "type": "boolean", "default": true },
+
+      "accessoryInfo": {
+        "type": "object",
+        "properties": {
+          "manufacturer": { "type": "string", "default": "Mill" },
+          "model": { "type": "string", "default": "Heater (Local API)" },
+          "firmwareRevision": { "type": "string", "default": "unknown" },
+          "hardwareRevision": { "type": "string", "default": "" },
+          "serialNumber": { "type": "string", "default": "" }
+        },
+        "additionalProperties": false
+      },
+
+      "devices": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "host": { "type": "string" },
+            "info": {
+              "type": "object",
+              "properties": {
+                "manufacturer": { "type": "string" },
+                "model": { "type": "string" },
+                "firmwareRevision": { "type": "string" },
+                "hardwareRevision": { "type": "string" },
+                "serialNumber": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["name", "host"]
+        }
+      }
+    },
+    "required": ["devices"]
+  }
+}

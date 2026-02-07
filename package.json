@@ -1,0 +1,31 @@
+{
+  "name": "homebridge-mill-heating",
+  "version": "0.1.0",
+  "description": "Homebridge plugin for Mill heaters using local REST API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "keywords": [
+    "homebridge-plugin",
+    "homebridge",
+    "mill",
+    "heater",
+    "thermostat"
+  ],
+  "engines": {
+    "node": ">=20 <25",
+    "homebridge": ">=1.7.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "homebridge": "^1.7.0",
+    "undici": "^7.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  }
+}
