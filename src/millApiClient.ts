@@ -6,7 +6,7 @@ export type OperationMode =
   | 'Independent device'
   | 'Control individually'
   | 'Invalid';
-    
+
 export interface ControlStatusDto {
   ambient_temperature: number;
   current_power: number;
@@ -18,27 +18,41 @@ export interface ControlStatusDto {
   status: 'ok' | string;
 }
 
+export type ProtocolMode = 'http' | 'https' | 'auto';
+
 export interface MillApiClientOptions {
   host: string;
-  apiKey: string;
-  allowInsecureHttps: boolean;
-  timeoutMs?: number;
+  protocol?: ProtocolMode;          // default: http
+  apiKey?: string;                 // optional
+  allowInsecureHttps?: boolean;    // default: true (when https)
+  timeoutMs?: number;              // default: 5000
 }
 
 export class MillApiClient {
   private readonly baseUrl: string;
   private readonly dispatcher?: Agent;
   private readonly timeoutMs: number;
+  private readonly protocolResolved: 'http' | 'https';
 
   constructor(private readonly opts: MillApiClientOptions) {
-    this.baseUrl = `https://${opts.host}`;
     this.timeoutMs = opts.timeoutMs ?? 5000;
 
-    if (opts.allowInsecureHttps) {
-      // Self-signed cert support
-      this.dispatcher = new Agent({
-        connect: { rejectUnauthorized: false },
-      });
+    const protocolMode: ProtocolMode = opts.protocol ?? 'http';
+    const hasKey = !!(opts.apiKey && opts.apiKey.trim().length > 0);
+
+    // Resolve protocol
+    if (protocolMode === 'auto') {
+      this.protocolResolved = hasKey ? 'https' : 'http';
+    } else {
+      this.protocolResolved = protocolMode;
+    }
+
+    this.baseUrl = `${this.protocolResolved}://${opts.host}`;
+
+    // HTTPS: allow self-signed if requested
+    const allowInsecure = opts.allowInsecureHttps ?? true;
+    if (this.protocolResolved === 'https' && allowInsecure) {
+      this.dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
     }
   }
 
@@ -60,7 +74,8 @@ export class MillApiClient {
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = {};
-    if (this.opts.apiKey) h.Authentication = this.opts.apiKey;
+    const key = this.opts.apiKey?.trim();
+    if (key) h.Authentication = key;
     return h;
   }
 
@@ -77,12 +92,10 @@ export class MillApiClient {
       method: 'GET',
       headers: this.headers(),
       signal: this.timeoutSignal(),
-      // undici extension to fetch() for custom TLS/connection handling
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      dispatcher: this.dispatcher as any,
+      dispatcher: this.dispatcher,
     });
 
-    const json: any = await res.json();
+    const json: any = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`GET ${path} failed: HTTP ${res.status} - ${JSON.stringify(json)}`);
     if (json?.status && json.status !== 'ok') throw new Error(`GET ${path} status != ok: ${json.status}`);
     return json as T;
@@ -94,18 +107,11 @@ export class MillApiClient {
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: this.timeoutSignal(),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      dispatcher: this.dispatcher as any,
+      dispatcher: this.dispatcher,
     });
 
     const json: any = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      throw new Error(`POST ${path} failed: HTTP ${res.status} - ${JSON.stringify(json)}`);
-    }
-
-    if (json?.status && json.status !== 'ok') {
-      throw new Error(`POST ${path} status != ok: ${json.status}`);
-    }
+    if (!res.ok) throw new Error(`POST ${path} failed: HTTP ${res.status} - ${JSON.stringify(json)}`);
+    if (json?.status && json.status !== 'ok') throw new Error(`POST ${path} status != ok: ${json.status}`);
   }
 }

@@ -1,170 +1,276 @@
-import { PlatformAccessory, Service, CharacteristicValue } from 'homebridge';
+import type {
+  CharacteristicValue,
+  PlatformAccessory,
+  Service,
+} from 'homebridge';
+
 import type { MillHeatingPlatform } from './platform';
-import { MillApiClient, ControlStatusDto } from './millApiClient';
-import type { DeviceConfig, EffectiveAccessoryInfo } from './types';
+import type { MillHeaterAccessoryConfig } from './types';
+import { MillApiClient } from './millApiClient';
 
 export class MillThermostatAccessory {
   private readonly service: Service;
+  private readonly infoService: Service;
+  private readonly client: MillApiClient;
 
-  private lastStatus?: ControlStatusDto;
-  private lastFetchAt = 0;
+  private pollTimer?: NodeJS.Timeout;
+
+  // Cached state
+  private active = true;
+  private currentTemp = 20;
+  private targetTemp = 21;
+  private heating = false;
+
+  // Config defaults
+  private readonly minTemp: number;
+  private readonly maxTemp: number;
+  private readonly step: number;
+  private readonly pollIntervalSeconds: number;
 
   constructor(
     private readonly platform: MillHeatingPlatform,
     private readonly accessory: PlatformAccessory,
-    private readonly device: DeviceConfig,
-    private readonly api: MillApiClient,
+    private readonly cfg: MillHeaterAccessoryConfig,
   ) {
-    this.setupAccessoryInformation();
+    const { hap } = this.platform['api'];
+    const Characteristic = hap.Characteristic;
+    const Service = hap.Service;
 
-    this.service = this.accessory.getService(this.platform.Service.Thermostat)
-      ?? this.accessory.addService(this.platform.Service.Thermostat);
+    this.minTemp = cfg.minTemperature ?? 5;
+    this.maxTemp = cfg.maxTemperature ?? 30;
+    this.step = cfg.temperatureStep ?? 0.5;
+    this.pollIntervalSeconds = cfg.pollIntervalSeconds ?? 10;
 
-    this.service.setCharacteristic(this.platform.Characteristic.Name, device.name);
+    this.client = new MillApiClient({
+      host: cfg.host,
+      protocol: cfg.protocol ?? 'http',
+      apiKey: cfg.apiKey ?? '',
+      allowInsecureHttps: cfg.allowInsecureHttps ?? true,
+      timeoutMs: 5000,
+    });
 
-    this.wireCharacteristics();
-    this.startPolling();
+    // Thermostat service
+    this.service =
+      this.accessory.getService(Service.Thermostat) ??
+      this.accessory.addService(Service.Thermostat);
 
-    void this.ensureControlIndividually(true).catch(err => {
-      this.platform.log.warn(`[${device.name}] ensure mode failed: ${err?.message ?? err}`);
+    this.service.setCharacteristic(Characteristic.Name, cfg.name);
+
+    // Accessory information
+    this.infoService =
+      this.accessory.getService(Service.AccessoryInformation) ??
+      this.accessory.addService(Service.AccessoryInformation);
+
+    this.infoService
+      .setCharacteristic(Characteristic.Manufacturer, cfg.manufacturer ?? 'Mill')
+      .setCharacteristic(Characteristic.Model, cfg.model ?? 'Gen 3/4 Heater')
+      .setCharacteristic(Characteristic.FirmwareRevision, cfg.firmwareRevision ?? '')
+      .setCharacteristic(Characteristic.SerialNumber, cfg.serialNumber ?? '');
+
+    // Display unit
+    const displayUnit =
+      (cfg.temperatureUnit ?? 'C') === 'F'
+        ? Characteristic.TemperatureDisplayUnits.FAHRENHEIT
+        : Characteristic.TemperatureDisplayUnits.CELSIUS;
+
+    this.service.setCharacteristic(Characteristic.TemperatureDisplayUnits, displayUnit);
+
+    // Props (min/max/step)
+    this.service.getCharacteristic(Characteristic.TargetTemperature).setProps({
+      minValue: this.minTemp,
+      maxValue: this.maxTemp,
+      minStep: this.step,
+    });
+
+    // TargetHeatingCoolingState: expose OFF + HEAT
+    this.service.getCharacteristic(Characteristic.TargetHeatingCoolingState).setProps({
+      validValues: [
+        Characteristic.TargetHeatingCoolingState.OFF,
+        Characteristic.TargetHeatingCoolingState.HEAT,
+      ],
+    });
+
+    // Handlers
+    this.service
+      .getCharacteristic(Characteristic.Active)
+      .onGet(this.handleGetActive.bind(this))
+      .onSet(this.handleSetActive.bind(this));
+
+    this.service
+      .getCharacteristic(Characteristic.CurrentTemperature)
+      .onGet(this.handleGetCurrentTemperature.bind(this));
+
+    this.service
+      .getCharacteristic(Characteristic.TargetTemperature)
+      .onGet(this.handleGetTargetTemperature.bind(this))
+      .onSet(this.handleSetTargetTemperature.bind(this));
+
+    this.service
+      .getCharacteristic(Characteristic.TargetHeatingCoolingState)
+      .onGet(this.handleGetTargetHeatingCoolingState.bind(this))
+      .onSet(this.handleSetTargetHeatingCoolingState.bind(this));
+
+    this.service
+      .getCharacteristic(Characteristic.CurrentHeatingCoolingState)
+      .onGet(this.handleGetCurrentHeatingCoolingState.bind(this));
+
+    // Start polling
+    this.startPolling().catch(err => {
+      this.platform['log'].error(`[${cfg.name}] Initial poll failed: ${this.errMsg(err)}`);
     });
   }
 
-  private setupAccessoryInformation(): void {
-    const info = this.accessory.getService(this.platform.Service.AccessoryInformation)
-      ?? this.accessory.addService(this.platform.Service.AccessoryInformation);
+  private async startPolling(): Promise<void> {
+    await this.pollOnce();
 
-    const effective = (this.accessory.context.effectiveInfo ?? {}) as EffectiveAccessoryInfo;
+    if (this.pollTimer) clearInterval(this.pollTimer);
 
-    info.setCharacteristic(this.platform.Characteristic.Manufacturer, effective.manufacturer ?? 'Mill');
-    info.setCharacteristic(this.platform.Characteristic.Model, effective.model ?? 'Heater (Local API)');
-    info.setCharacteristic(this.platform.Characteristic.FirmwareRevision, effective.firmwareRevision ?? 'unknown');
-
-    if (effective.hardwareRevision) {
-      info.setCharacteristic(this.platform.Characteristic.HardwareRevision, effective.hardwareRevision);
-    }
-    if (effective.serialNumber) {
-      info.setCharacteristic(this.platform.Characteristic.SerialNumber, effective.serialNumber);
-    }
+    this.pollTimer = setInterval(() => {
+      this.pollOnce().catch(err => {
+        this.platform['log'].warn(`[${this.cfg.name}] Poll failed: ${this.errMsg(err)}`);
+      });
+    }, this.pollIntervalSeconds * 1000);
   }
 
-  private wireCharacteristics(): void {
-    const C = this.platform.Characteristic;
+  private async pollOnce(): Promise<void> {
+    const cs = await this.client.getControlStatus();
 
-    const unit = this.platform.temperatureUnit === 'fahrenheit'
-      ? C.TemperatureDisplayUnits.FAHRENHEIT
-      : C.TemperatureDisplayUnits.CELSIUS;
+    // Map Mill -> HomeKit
+    this.currentTemp = cs.ambient_temperature;
+    this.targetTemp = cs.set_temperature;
 
-    this.service.getCharacteristic(C.TemperatureDisplayUnits)
-      .onGet(async () => unit)
-      .onSet(async (_value: CharacteristicValue) => {
-        this.service.updateCharacteristic(C.TemperatureDisplayUnits, unit);
-      });
+    // "switched_on" + op mode "Off" is the best indicator
+    const isOffMode = cs.operation_mode === 'Off';
+    this.active = !isOffMode && !!cs.switched_on;
 
-    this.service.updateCharacteristic(C.TemperatureDisplayUnits, unit);
+    // heating if control_signal > 0 AND active
+    this.heating = this.active && (cs.control_signal ?? 0) > 0;
 
-    this.service.getCharacteristic(C.CurrentTemperature)
-      .onGet(async () => (await this.getFreshStatus()).ambient_temperature);
-
-    this.service.getCharacteristic(C.TargetTemperature)
-      .setProps({
-        minValue: this.platform.temperatureMin,
-        maxValue: this.platform.temperatureMax,
-        minStep: this.platform.temperatureStep,
-      })
-      .onGet(async () => (await this.getFreshStatus()).set_temperature)
-      .onSet(async (value: CharacteristicValue) => {
-        const v = Number(value);
-        const s = await this.getFreshStatus();
-
-        if (s.operation_mode === 'Off' || s.switched_on === false) {
-          await this.api.setOperationMode('Control individually');
-        } else if (s.operation_mode !== 'Control individually') {
-          await this.api.setOperationMode('Control individually');
-        }
-
-        await this.api.setNormalTemperature(v);
-        await this.refreshAndPush();
-      });
-
-    this.service.getCharacteristic(C.TargetHeatingCoolingState)
-      .setProps({
-        validValues: [
-          C.TargetHeatingCoolingState.OFF,
-          C.TargetHeatingCoolingState.HEAT,
-        ],
-      })
-      .onGet(async () => this.mapTargetState(await this.getFreshStatus()))
-      .onSet(async (value: CharacteristicValue) => {
-        const v = Number(value);
-
-        if (v === C.TargetHeatingCoolingState.OFF) {
-          await this.api.setOperationMode('Off');
-        } else {
-          await this.api.setOperationMode('Control individually');
-        }
-
-        await this.refreshAndPush();
-      });
-
-    this.service.getCharacteristic(C.CurrentHeatingCoolingState)
-      .onGet(async () => this.mapCurrentState(await this.getFreshStatus()));
+    this.updateCharacteristics();
   }
 
-  private startPolling(): void {
-    const intervalMs = this.platform.pollSeconds * 1000;
+  private updateCharacteristics(): void {
+    const { hap } = this.platform['api'];
+    const Characteristic = hap.Characteristic;
 
-    setInterval(() => {
-      void this.refreshAndPush().catch(err => {
-        this.platform.log.warn(`[${this.device.name}] poll error: ${err?.message ?? err}`);
-      });
-    }, intervalMs);
+    this.service.updateCharacteristic(
+      Characteristic.Active,
+      this.active ? Characteristic.Active.ACTIVE : Characteristic.Active.INACTIVE,
+    );
+
+    this.service.updateCharacteristic(Characteristic.CurrentTemperature, this.currentTemp);
+    this.service.updateCharacteristic(Characteristic.TargetTemperature, this.targetTemp);
+
+    this.service.updateCharacteristic(
+      Characteristic.CurrentHeatingCoolingState,
+      this.heating
+        ? Characteristic.CurrentHeatingCoolingState.HEAT
+        : Characteristic.CurrentHeatingCoolingState.OFF,
+    );
+
+    this.service.updateCharacteristic(
+      Characteristic.TargetHeatingCoolingState,
+      this.active
+        ? Characteristic.TargetHeatingCoolingState.HEAT
+        : Characteristic.TargetHeatingCoolingState.OFF,
+    );
   }
 
-  private async refreshAndPush(): Promise<void> {
-    const s = await this.api.getControlStatus();
-    this.lastStatus = s;
-    this.lastFetchAt = Date.now();
+  // Characteristic handlers
 
-    const C = this.platform.Characteristic;
-
-    this.service.updateCharacteristic(C.CurrentTemperature, s.ambient_temperature);
-    this.service.updateCharacteristic(C.TargetTemperature, s.set_temperature);
-    this.service.updateCharacteristic(C.TargetHeatingCoolingState, this.mapTargetState(s));
-    this.service.updateCharacteristic(C.CurrentHeatingCoolingState, this.mapCurrentState(s));
+  private handleGetActive(): CharacteristicValue {
+    const { hap } = this.platform['api'];
+    return this.active ? hap.Characteristic.Active.ACTIVE : hap.Characteristic.Active.INACTIVE;
   }
 
-  private async getFreshStatus(): Promise<ControlStatusDto> {
-    const now = Date.now();
-    if (this.lastStatus && (now - this.lastFetchAt) < this.platform.cacheTtlMs) {
-      return this.lastStatus;
+  private async handleSetActive(value: CharacteristicValue): Promise<void> {
+    const { hap } = this.platform['api'];
+    const Characteristic = hap.Characteristic;
+
+    const wantActive = value === Characteristic.Active.ACTIVE;
+
+    if (!wantActive) {
+      // OFF means real OFF on device
+      await this.client.setOperationMode('Off');
+      this.active = false;
+      this.heating = false;
+      this.updateCharacteristics();
+      return;
     }
 
-    const s = await this.api.getControlStatus();
-    this.lastStatus = s;
-    this.lastFetchAt = now;
-    return s;
+    // Turn on: Control individually + keep current target
+    await this.client.setOperationMode('Control individually');
+    await this.client.setNormalTemperature(this.clampTemp(this.targetTemp));
+    this.active = true;
+    this.updateCharacteristics();
   }
 
-  private mapTargetState(s: ControlStatusDto): number {
-    const C = this.platform.Characteristic.TargetHeatingCoolingState;
-    const isOff = s.operation_mode === 'Off' || s.switched_on === false;
-    return isOff ? C.OFF : C.HEAT;
+  private handleGetCurrentTemperature(): CharacteristicValue {
+    return this.currentTemp;
   }
 
-  private mapCurrentState(s: ControlStatusDto): number {
-    const C = this.platform.Characteristic.CurrentHeatingCoolingState;
-    const isOff = s.operation_mode === 'Off' || s.switched_on === false;
-    if (isOff) return C.OFF;
-    return (s.current_power > 0 || s.control_signal > 0) ? C.HEAT : C.OFF;
+  private handleGetTargetTemperature(): CharacteristicValue {
+    return this.targetTemp;
   }
 
-  private async ensureControlIndividually(onlyIfNotOff: boolean): Promise<void> {
-    const s = await this.getFreshStatus();
-    if (onlyIfNotOff && s.operation_mode === 'Off') return;
-    if (s.operation_mode !== 'Control individually') {
-      await this.api.setOperationMode('Control individually');
-      await this.refreshAndPush();
+  private async handleSetTargetTemperature(value: CharacteristicValue): Promise<void> {
+    const temp = this.clampTemp(Number(value));
+    this.targetTemp = temp;
+
+    // In HomeKit, changing target temp typically implies "on"
+    if (!this.active) {
+      await this.client.setOperationMode('Control individually');
+      this.active = true;
+    }
+
+    await this.client.setNormalTemperature(temp);
+    this.updateCharacteristics();
+  }
+
+  private handleGetTargetHeatingCoolingState(): CharacteristicValue {
+    const { hap } = this.platform['api'];
+    return this.active
+      ? hap.Characteristic.TargetHeatingCoolingState.HEAT
+      : hap.Characteristic.TargetHeatingCoolingState.OFF;
+  }
+
+  private async handleSetTargetHeatingCoolingState(value: CharacteristicValue): Promise<void> {
+    const { hap } = this.platform['api'];
+    const Characteristic = hap.Characteristic;
+
+    const v = Number(value);
+    if (v === Characteristic.TargetHeatingCoolingState.OFF) {
+      await this.handleSetActive(Characteristic.Active.INACTIVE);
+      return;
+    }
+
+    // HEAT selected
+    await this.handleSetActive(Characteristic.Active.ACTIVE);
+  }
+
+  private handleGetCurrentHeatingCoolingState(): CharacteristicValue {
+    const { hap } = this.platform['api'];
+    return this.heating
+      ? hap.Characteristic.CurrentHeatingCoolingState.HEAT
+      : hap.Characteristic.CurrentHeatingCoolingState.OFF;
+  }
+
+  // Helpers
+
+  private clampTemp(t: number): number {
+    const clamped = Math.min(this.maxTemp, Math.max(this.minTemp, t));
+    // Snap to step
+    const snapped = Math.round(clamped / this.step) * this.step;
+    // avoid floating precision e.g. 21.0000000002
+    return Math.round(snapped * 10) / 10;
+  }
+
+  private errMsg(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
     }
   }
 }

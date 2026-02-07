@@ -24,6 +24,12 @@
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   },
+  "files": [
+    "dist",
+    "config.schema.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w"

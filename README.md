@@ -1,108 +1,139 @@
-# Homebridge Mill Heating
+# homebridge-mill-heating
 
-Homebridge plugin for controlling **Mill heaters** using the **local HTTPS REST API**.
+Local Homebridge plugin for **Mill (Gen 3+) heaters** using the **Millheat local WiFi Control REST API**.
 
-Each heater is exposed as a native **HomeKit Thermostat**:
-- Off / Heat
-- Target temperature
-- Current temperature
-- Heating state
+This plugin exposes a heater as a **HomeKit Thermostat** and lets HomeKit control the setpoint. The heater is kept in *individual control* (no weekly program).
 
-The plugin focuses on **local control only**:
-- No cloud
-- No Mill account
-- No automatic device provisioning
+> ✅ Recommended: **HTTP (no API key)** for Gen 4 based on current findings (see Gen 4 note below).
 
 ---
 
-## Important: API key setup (required)
+## Features
 
-Mill heaters using the local REST API require an **API key**.
-Once set, the heater switches to **HTTPS-only** and requires authentication.
-
-The plugin **does not** configure the heater automatically.
-You must configure the API key **manually once**.
-
-### Set API key on the heater
-
-Run the following command from a device on the same local network:
-
-    curl -X POST http://<heater-ip>/set-api-key \
-      -H "Content-Type: application/json" \
-      -d '{"api_key":"YOUR_SECRET_KEY"}'
-
-After this:
-- The heater **reboots**
-- Only **HTTPS** is accepted
-- All requests must include the header:
-
-    Authentication: YOUR_SECRET_KEY
-
-- The HTTPS certificate is **self-signed**
-- The API key can only be changed by **factory reset**
+- Thermostat service (Current Temperature, Target Temperature, Heating state)
+- Supports **multiple heaters** (each heater is its own accessory)
+- Configurable per heater:
+  - Host (IP or hostname)
+  - Protocol: `http`, `https`, or `auto`
+  - Optional API key (adds `Authentication` header)
+  - Poll interval
+  - Min/Max temperature and step
+  - Temperature unit (C/F)
+  - Manufacturer / Model / Firmware / Serial shown in Home app
 
 ---
 
-## Supported devices
+## Gen 4 note (IMPORTANT)
 
-### Supported
-- Mill heaters exposing the **local REST API (Gen 3 or newer)**
-- Tested on **Mill Gen 4 panel heater** using API provided by Mill Support
+On at least one **Mill Gen 4** heater / firmware, calling `POST /set-api-key` caused the device to become **cloud-only**:
+- The heater stayed online in the Mill app
+- **Local REST ports were closed** (no HTTP/HTTPS access on LAN)
 
-Gen 4 devices are expected to work as long as the same endpoints are available:
-- `/status`
-- `/control-status`
-- `/operation-mode`
-- `/set-temperature`
+Because of this, **this plugin does NOT set an API key on the device** and the default is to run **without API key over HTTP** on a trusted LAN.
 
-### Not supported
-- Mill Wi-Fi Socket (would require an Outlet/Switch accessory)
+If your device already has local HTTPS + API key working (commonly Gen 3), you can enable `https`/`auto` + `apiKey` in config.
+
+---
+
+## Requirements
+
+- Homebridge **v1.7+**
+- Node.js **v20+** recommended (matches current Homebridge guidance)
 
 ---
 
 ## Installation
 
-### Homebridge UI
-Search for **Mill Heating** and install.
+### Option A: Install from npm (once published)
+```bash
+sudo npm i -g homebridge-mill-heating
+```
 
-### npm
+### Option B: Install from a local `.tgz` (recommended for development)
 
-    npm install -g homebridge-mill-heating
+On your dev machine (plugin folder):
+```bash
+npm ci
+npm run build
+npm pack
+```
 
-Restart Homebridge after installation.
+Copy the generated `homebridge-mill-heating-x.y.z.tgz` to your Homebridge host (Pi), e.g. to `/tmp/`.
+
+If you run Homebridge via **hb-service** (Homebridge UI):
+```bash
+sudo hb-service stop
+cd /var/lib/homebridge
+sudo -u homebridge npm i /tmp/homebridge-mill-heating-x.y.z.tgz
+sudo hb-service start
+```
 
 ---
 
 ## Configuration
 
-Example configuration:
+This plugin is a **platform** plugin. Add it to `config.json`.
+
+### Minimal (recommended for Gen 4): HTTP without API key
 
 ```json
 {
-  "platform": "MillHeatingPlatform",
-  "name": "Mill Heating",
-
-  "pollSeconds": 10,
-  "cacheTtlMs": 2000,
-
-  "temperatureUnit": "celsius",
-  "temperatureMin": 5,
-  "temperatureMax": 35,
-  "temperatureStep": 0.5,
-
-  "apiKey": "YOUR_SECRET_KEY",
-  "allowInsecureHttps": true,
-
-  "accessoryInfo": {
-    "manufacturer": "Mill",
-    "model": "Panel Heater (Local API)",
-    "firmwareRevision": "unknown"
-  },
-
-  "devices": [
+  "platform": "MillHeating",
+  "accessories": [
     {
       "name": "Sommerhus Radiator",
-      "host": "192.168.1.105"
+      "host": "192.168.1.194",
+      "protocol": "http"
+    }
+  ]
+}
+```
+
+### HTTPS with API key (only if local REST remains reachable)
+
+```json
+{
+  "platform": "MillHeating",
+  "accessories": [
+    {
+      "name": "Mill Heater (Gen3)",
+      "host": "192.168.1.105",
+      "protocol": "https",
+      "apiKey": "your-api-key",
+      "allowInsecureHttps": true
+    }
+  ]
+}
+```
+
+### Protocol selection rules
+
+- `protocol: "http"` → always uses HTTP
+- `protocol: "https"` → always uses HTTPS
+- `protocol: "auto"` → uses HTTPS if `apiKey` is set, otherwise HTTP
+
+### Full example (all per-heater options)
+
+```json
+{
+  "platform": "MillHeating",
+  "accessories": [
+    {
+      "name": "Living Room Heater",
+      "host": "mill-heater.local",
+      "protocol": "http",
+
+      "pollIntervalSeconds": 10,
+
+      "minTemperature": 5,
+      "maxTemperature": 30,
+      "temperatureStep": 0.5,
+      "temperatureUnit": "C",
+
+      "manufacturer": "Mill",
+      "model": "Gen 4 Panel Heater",
+      "firmwareRevision": "0x251105",
+      "serialNumber": "A0:85:E3:CD:0E:30"
     }
   ]
 }
@@ -110,91 +141,66 @@ Example configuration:
 
 ---
 
-## Configuration options
+## API key and HTTPS
 
-### Platform options
+### Setting an API key (manual)
 
-| Option | Description | Default |
-|------|------------|---------|
-| pollSeconds | Poll interval (seconds) | 10 |
-| cacheTtlMs | Cache duration (ms) | 2000 |
-| temperatureUnit | celsius / fahrenheit | celsius |
-| temperatureMin | Minimum target temperature | 5 |
-| temperatureMax | Maximum target temperature | 35 |
-| temperatureStep | Temperature step size | 0.5 |
-| apiKey | Heater API key | required |
-| allowInsecureHttps | Accept self-signed HTTPS certificate | true |
+**Warning (Gen 4):** setting an API key may disable local REST on some firmwares. Proceed at your own risk.
 
-### Device options
+If you still want to set it (commonly Gen 3):
+- Call `POST /set-api-key` over HTTP **once**
+- Device reboots and switches to HTTPS with a self-signed certificate
+- Subsequent requests must use HTTPS + header `Authentication: <apiKey>`
 
-| Option | Description |
-|------|------------|
-| name | Name shown in HomeKit |
-| host | IP address or resolvable hostname |
+Example (Windows PowerShell, using real curl):
 
----
-
-## Accessory information
-
-You can customize what HomeKit shows under accessory details:
-
-```json
-"accessoryInfo": {
-  "manufacturer": "Mill",
-  "model": "Panel Heater Gen 4",
-  "firmwareRevision": "0x220727",
-  "serialNumber": ""
-}
+```powershell
+curl.exe -X POST "http://192.168.1.105/set-api-key" -H "Content-Type: application/json" --data "{\"api_key\":\"your-api-key\"}"
 ```
 
----
+Verify HTTPS after reboot:
 
-## HomeKit behavior
-
-- **OFF**  
-  Sets operation mode to `Off`
-
-- **HEAT**  
-  Sets operation mode to `Control individually`
-
-- **Setting temperature while OFF**  
-  Automatically switches to HEAT first
-
-- **Heating state**  
-  Derived from heater power / control signal
-
-- **Temperature unit**  
-  Exposed via HomeKit Thermostat service
-
----
-
-## Networking notes
-
-- If using IP address, configure a **DHCP reservation**
-- Hostnames are supported if resolvable by the Homebridge host
-
----
-
-## Security
-
-- Local network only
-- HTTPS + API key authentication
-- Self-signed certificates supported
-- Plugin never:
-  - Sets API keys
-  - Resets devices
-  - Changes device configuration
+```powershell
+curl.exe -k "https://192.168.1.105/status" -H "Authentication: your-api-key"
+```
 
 ---
 
 ## Troubleshooting
 
-Verify heater connectivity:
+### PowerShell `curl` vs `curl.exe`
+In Windows PowerShell, `curl` is often an alias for `Invoke-WebRequest`. Use **`curl.exe`** to run real curl.
 
-    curl -k -H "Authentication: YOUR_SECRET_KEY" https://<heater-ip>/status
-    curl -k -H "Authentication: YOUR_SECRET_KEY" https://<heater-ip>/control-status
+### Heater reachable in app but not on LAN
+This usually means the heater is running **cloud-only** mode and the local REST API is disabled. Ensure the device is configured for a mode that enables local API (see Mill documentation `sta_cloud_and_local_api`).
 
-If both return `status: ok`, the plugin should work.
+### Self-signed certificate errors
+Use:
+- `allowInsecureHttps: true` in config, and/or
+- `curl.exe -k ...` for manual testing
+
+### Homebridge logs
+For hb-service installs:
+```bash
+sudo tail -n 200 /var/lib/homebridge/homebridge.log
+```
+
+---
+
+## Development
+
+```bash
+npm ci
+npm run build
+npm test
+```
+
+### Packaging sanity check
+Before running `npm pack`, ensure `dist/` exists and is included in the package:
+```bash
+npm run build
+npm pack --dry-run
+```
 
 ---
 
@@ -206,5 +212,4 @@ MIT
 
 ## Disclaimer
 
-This plugin is not affiliated with or endorsed by Mill International AS.
-
+This project is not affiliated with Mill. Use at your own risk.

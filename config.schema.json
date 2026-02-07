@@ -1,65 +1,97 @@
 {
-  "pluginAlias": "MillHeatingPlatform",
+  "pluginAlias": "MillHeating",
   "pluginType": "platform",
   "singular": true,
   "schema": {
     "type": "object",
     "properties": {
-      "name": { "type": "string", "default": "Mill Heating" },
-
-      "pollSeconds": { "type": "number", "default": 10, "minimum": 2, "maximum": 300 },
-      "cacheTtlMs": { "type": "number", "default": 2000, "minimum": 0, "maximum": 10000 },
-
-      "temperatureUnit": {
-        "type": "string",
-        "default": "celsius",
-        "oneOf": [
-          { "title": "Celsius", "enum": ["celsius"] },
-          { "title": "Fahrenheit", "enum": ["fahrenheit"] }
-        ]
-      },
-      "temperatureMin": { "type": "number", "default": 5 },
-      "temperatureMax": { "type": "number", "default": 35 },
-      "temperatureStep": { "type": "number", "default": 0.5 },
-
-      "apiKey": { "type": "string", "default": "" },
-      "allowInsecureHttps": { "type": "boolean", "default": true },
-
-      "accessoryInfo": {
-        "type": "object",
-        "properties": {
-          "manufacturer": { "type": "string", "default": "Mill" },
-          "model": { "type": "string", "default": "Heater (Local API)" },
-          "firmwareRevision": { "type": "string", "default": "unknown" },
-          "hardwareRevision": { "type": "string", "default": "" },
-          "serialNumber": { "type": "string", "default": "" }
-        },
-        "additionalProperties": false
-      },
-
-      "devices": {
+      "accessories": {
         "type": "array",
+        "title": "Heaters",
         "items": {
           "type": "object",
+          "required": ["name", "host"],
           "properties": {
-            "name": { "type": "string" },
-            "host": { "type": "string" },
-            "info": {
-              "type": "object",
-              "properties": {
-                "manufacturer": { "type": "string" },
-                "model": { "type": "string" },
-                "firmwareRevision": { "type": "string" },
-                "hardwareRevision": { "type": "string" },
-                "serialNumber": { "type": "string" }
-              },
-              "additionalProperties": false
+            "name": {
+              "type": "string",
+              "title": "Name",
+              "description": "Accessory name shown in Home app."
+            },
+            "host": {
+              "type": "string",
+              "title": "Host",
+              "description": "IP address or hostname of the heater (hostname must be resolvable by the Homebridge host)."
+            },
+            "protocol": {
+              "type": "string",
+              "title": "Protocol",
+              "enum": ["http", "https", "auto"],
+              "default": "http",
+              "description": "Recommended default is http (no API key). Auto = https if apiKey is set, otherwise http."
+            },
+            "apiKey": {
+              "type": "string",
+              "title": "API Key",
+              "default": "",
+              "description": "Optional. Adds Authentication header. WARNING: Some Gen 4 firmwares may disable local REST after setting API key."
+            },
+            "allowInsecureHttps": {
+              "type": "boolean",
+              "title": "Allow insecure HTTPS",
+              "default": true,
+              "description": "If using https, allow self-signed certificates."
+            },
+            "pollIntervalSeconds": {
+              "type": "integer",
+              "title": "Poll interval (seconds)",
+              "default": 10,
+              "minimum": 2,
+              "maximum": 300
+            },
+            "minTemperature": {
+              "type": "number",
+              "title": "Min temperature",
+              "default": 5
+            },
+            "maxTemperature": {
+              "type": "number",
+              "title": "Max temperature",
+              "default": 30
+            },
+            "temperatureStep": {
+              "type": "number",
+              "title": "Temperature step",
+              "default": 0.5
+            },
+            "temperatureUnit": {
+              "type": "string",
+              "title": "Temperature unit",
+              "enum": ["C", "F"],
+              "default": "C"
+            },
+            "manufacturer": {
+              "type": "string",
+              "title": "Manufacturer",
+              "default": "Mill"
+            },
+            "model": {
+              "type": "string",
+              "title": "Model",
+              "default": "Gen 3/4 Heater"
+            },
+            "firmwareRevision": {
+              "type": "string",
+              "title": "Firmware revision",
+              "default": ""
+            },
+            "serialNumber": {
+              "type": "string",
+              "title": "Serial number",
+              "default": ""
             }
-          },
-          "required": ["name", "host"]
+          }
         }
       }
-    },
-    "required": ["devices"]
+    }
   }
 }
