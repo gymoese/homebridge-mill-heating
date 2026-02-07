@@ -9,6 +9,7 @@ import type {
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import type { MillHeatingPlatformConfig, MillHeaterAccessoryConfig } from './types';
 import { MillThermostatAccessory } from './millThermostatAccessory';
+import pkg from '../package.json';
 
 export class MillHeatingPlatform implements DynamicPlatformPlugin {
   private readonly accessories: PlatformAccessory[] = [];
@@ -19,6 +20,7 @@ export class MillHeatingPlatform implements DynamicPlatformPlugin {
     private readonly api: API,
   ) {
     this.log.debug('Finished initializing platform:', this.config.name);
+    this.log.info(`homebridge-mill-heating v${pkg.version} loaded`);
 
     this.api.on('didFinishLaunching', () => {
       this.log.debug('didFinishLaunching');
