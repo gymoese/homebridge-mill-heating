@@ -135,16 +135,14 @@ export class MillThermostatAccessory {
   private async pollOnce(): Promise<void> {
     const cs = await this.client.getControlStatus();
 
-    // Map Mill -> HomeKit
     this.currentTemp = cs.ambient_temperature;
     this.targetTemp = cs.set_temperature;
 
-    // "switched_on" + op mode "Off" is the best indicator
-    const isOffMode = cs.operation_mode === 'Off';
-    this.active = !isOffMode && !!cs.switched_on;
+    // OFF => off, else on (ignore switched_on)
+    this.active = cs.operation_mode !== 'OFF';
 
-    // heating if control_signal > 0 AND active
-    this.heating = this.active && (cs.control_signal ?? 0) > 0;
+    // heating if active and current_power > 0
+    this.heating = this.active && (cs.current_power ?? 0) > 0;
 
     this.updateCharacteristics();
   }
@@ -191,7 +189,7 @@ export class MillThermostatAccessory {
 
     if (!wantActive) {
       // OFF means real OFF on device
-      await this.client.setOperationMode('Off');
+      await this.client.setOperationMode('OFF');
       this.active = false;
       this.heating = false;
       this.updateCharacteristics();

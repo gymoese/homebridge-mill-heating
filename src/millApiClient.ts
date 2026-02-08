@@ -1,7 +1,7 @@
 import { Agent, fetch } from 'undici';
 
 export type OperationMode =
-  | 'Off'
+  | 'OFF'
   | 'Weekly program'
   | 'Independent device'
   | 'Control individually'
@@ -54,10 +54,6 @@ export class MillApiClient {
     if (this.protocolResolved === 'https' && allowInsecure) {
       this.dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
     }
-  }
-
-  async getStatus(): Promise<{ status: 'ok' | string; name?: string; version?: string; mac_address?: string }> {
-    return this.getJson('/status');
   }
 
   async getControlStatus(): Promise<ControlStatusDto> {
